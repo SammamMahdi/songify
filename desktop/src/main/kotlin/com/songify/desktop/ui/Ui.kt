@@ -1,6 +1,13 @@
 package com.songify.desktop.ui
 
+import androidx.compose.foundation.LocalScrollbarStyle
+import androidx.compose.foundation.ScrollbarStyle
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.unit.dp
+import com.songify.desktop.Offline
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -72,6 +79,11 @@ class DesktopUi(private val snackbar: SnackbarHostState, private val scope: Coro
 
 val LocalUi = staticCompositionLocalOf<DesktopUi> { error("DesktopUi not provided") }
 
+// Provided once at the top so song rows don't each subscribe to the library, downloads and player.
+val LocalLikedKeys = compositionLocalOf<Set<String>> { emptySet() }
+val LocalDownloadStates = compositionLocalOf<Map<String, Offline>> { emptyMap() }
+val LocalCurrentKey = compositionLocalOf<String?> { null }
+
 val TextSecondary = Color(0xFFB3B3B3)
 
 data class AccentPreset(val name: String, val argb: Int)
@@ -119,7 +131,18 @@ fun SongifyTheme(accent: Color, amoled: Boolean, content: @Composable () -> Unit
         titleMedium = base.titleMedium.copy(fontWeight = FontWeight.SemiBold),
         titleSmall = base.titleSmall.copy(fontWeight = FontWeight.SemiBold),
     )
-    MaterialTheme(colorScheme = colors, typography = typography, content = content)
+    // Thin, rounded scrollbars that brighten on hover, like the rest of the dark UI.
+    val scrollbars = ScrollbarStyle(
+        minimalHeight = 48.dp,
+        thickness = 8.dp,
+        shape = RoundedCornerShape(4.dp),
+        hoverDurationMillis = 250,
+        unhoverColor = Color.White.copy(alpha = 0.18f),
+        hoverColor = Color.White.copy(alpha = 0.45f),
+    )
+    MaterialTheme(colorScheme = colors, typography = typography) {
+        CompositionLocalProvider(LocalScrollbarStyle provides scrollbars, content = content)
+    }
 }
 
 fun formatTime(ms: Long): String {

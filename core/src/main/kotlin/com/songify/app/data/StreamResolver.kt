@@ -55,6 +55,17 @@ object StreamResolver {
         return url
     }
 
+    /**
+     * Forgets the stream URL for [trackUri] so the next [resolve] fetches a fresh one. Stream links are
+     * occasionally refused (HTTP 403) by the host; a new link for the same song usually works.
+     */
+    fun invalidate(trackUri: String) {
+        val match = Regex("""^songify://(\w+)/([^?]+)""").find(trackUri) ?: return
+        val (host, id) = match.destructured
+        cache.keys.removeIf { it.startsWith("$host/$id/") }
+        if (host == "youtube") YouTubeMusic.forget(id)
+    }
+
     /** Warms the cache so the track starts instantly when played. */
     fun prefetch(trackUri: String) {
         runCatching { resolve(trackUri) }

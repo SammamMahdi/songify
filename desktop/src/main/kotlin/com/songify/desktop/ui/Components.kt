@@ -1,5 +1,22 @@
 package com.songify.desktop.ui
 
+import androidx.compose.foundation.TooltipArea
+import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.platform.LocalDensity
+import java.awt.Cursor
 import androidx.compose.foundation.ContextMenuArea
 import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -129,13 +146,17 @@ fun DownloadBadge(state: Offline?) {
 /** The actions for one song, shared by the ⋮ menu and the right-click menu. */
 private data class SongAction(val label: String, val run: () -> Unit)
 
-@Composable
-private fun songActions(track: Track, playlistId: String?, close: () -> Unit): List<SongAction> {
-    val ui = LocalUi.current
-    val clipboard = LocalClipboardManager.current
-    val liked = Library.data.collectAsState().value.isLiked(track)
-    val download = DesktopDownloads.states.collectAsState().value[track.key]
-    return buildList {
+// Plain function (not composable) so menus are only built when they're opened.
+private fun songActions(
+    track: Track,
+    playlistId: String?,
+    liked: Boolean,
+    download: Offline?,
+    ui: DesktopUi,
+    copy: (String) -> Unit,
+    close: () -> Unit,
+): List<SongAction> =
+    buildList {
         add(SongAction(if (liked) "Remove from Liked Songs" else "Add to Liked Songs") { Library.toggleLike(track) })
         add(SongAction("Add to playlist…") { ui.addToPlaylist = listOf(track) })
         add(
@@ -151,37 +172,42 @@ private fun songActions(track: Track, playlistId: String?, close: () -> Unit): L
         add(SongAction("Start radio") { DesktopPlayer.startRadio(track) })
         add(SongAction("Go to artist") { ui.go(Screen.ArtistScreen(track.artist)) })
         if (playlistId != null) add(SongAction("Remove from this playlist") { Library.removeFromPlaylist(playlistId, track) })
-        add(SongAction("Copy song info") { clipboard.setText(AnnotatedString(track.shareText)); ui.toast("Copied") })
+        add(SongAction("Copy song info") { copy(track.shareText); ui.toast("Copied") })
     }.map { action -> SongAction(action.label) { close(); action.run() } }
-}
 
 @Composable
 fun SongMenuButton(track: Track, playlistId: String? = null, tint: Color = TextSecondary) {
+    val ui = LocalUi.current
+    val clipboard = LocalClipboardManager.current
+    val liked = track.key in LocalLikedKeys.current
+    val download = LocalDownloadStates.current[track.key]
     var open by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { open = true }) { Icon(Icons.Rounded.MoreHoriz, contentDescription = "More options", tint = tint) }
+        IconAction(Icons.Rounded.MoreHoriz, "More options", tint = tint) { open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            songActions(track, playlistId) { open = false }.forEach { action ->
+            songActions(track, playlistId, liked, download, ui, { clipboard.setText(AnnotatedString(it)) }) { open = false }.forEach { action ->
                 DropdownMenuItem(text = { Text(action.label) }, onClick = action.run)
             }
         }
     }
 }
 
-/** A song in a list: double-click or the number to play, right-click or ⋮ for options. */
+/** A song in a list: click to play, right-click or ⋯ for options. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TrackRow(track: Track, number: Int, onPlay: () -> Unit, playlistId: String? = null) {
     val ui = LocalUi.current
-    val player by DesktopPlayer.state.collectAsState()
-    val current = player.current?.key == track.key
-    val liked = Library.data.collectAsState().value.isLiked(track)
-    val download = DesktopDownloads.states.collectAsState().value[track.key]
+    val clipboard = LocalClipboardManager.current
+    val current = LocalCurrentKey.current == track.key
+    val liked = track.key in LocalLikedKeys.current
+    val download = LocalDownloadStates.current[track.key]
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
-    val actions = songActions(track, playlistId) {}
 
-    ContextMenuArea(items = { actions.map { ContextMenuItem(it.label, it.run) } }) {
+    ContextMenuArea(items = {
+        songActions(track, playlistId, liked, download, ui, { clipboard.setText(AnnotatedString(it)) }) {}
+            .map { ContextMenuItem(it.label, it.run) }
+    }) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -237,6 +263,62 @@ fun TrackRow(track: Track, number: Int, onPlay: () -> Unit, playlistId: String? 
             Text(formatTime(track.durationSec * 1000), color = TextSecondary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(48.dp))
             SongMenuButton(track, playlistId)
         }
+    }
+}
+
+/** A LazyColumn with a scrollbar on the right. */
+@Composable
+fun ScrollColumn(
+    modifier: Modifier = Modifier,
+    state: LazyListState = rememberLazyListState(),
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    content: LazyListScope.() -> Unit,
+) {
+    Box(modifier) {
+        LazyColumn(Modifier.fillMaxSize(), state = state, contentPadding = contentPadding, content = content)
+        VerticalScrollbar(
+            rememberScrollbarAdapter(state),
+            Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 4.dp, horizontal = 2.dp),
+        )
+    }
+}
+
+/** A draggable divider between panels; reports horizontal movement and when the drag ends. */
+@Composable
+fun Splitter(onDrag: (Dp) -> Unit, onDragEnd: () -> Unit) {
+    val density = LocalDensity.current
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    Box(
+        Modifier
+            .width(8.dp)
+            .fillMaxHeight()
+            .hoverable(hover)
+            .pointerHoverIcon(PointerIcon(Cursor(Cursor.E_RESIZE_CURSOR)))
+            .draggable(
+                rememberDraggableState { px -> onDrag(with(density) { px.toDp() }) },
+                Orientation.Horizontal,
+                onDragStopped = { onDragEnd() },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (hovered) Box(Modifier.width(2.dp).fillMaxHeight().padding(vertical = 8.dp).background(Color.White.copy(alpha = 0.3f)))
+    }
+}
+
+/** An icon button with a hover tooltip. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun IconAction(icon: ImageVector, label: String, tint: Color = Color.White, size: Dp = 24.dp, onClick: () -> Unit) {
+    TooltipArea(
+        tooltip = {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(4.dp), shadowElevation = 4.dp) {
+                Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            }
+        },
+        delayMillis = 500,
+    ) {
+        IconButton(onClick = onClick) { Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(size)) }
     }
 }
 

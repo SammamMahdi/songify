@@ -68,6 +68,9 @@ object DesktopPlayer {
 
     val positionMs: Long get() = if (loadedKey == null) resumeAtMs else engine.positionMs
 
+    /** Audible gaps so far (sound card ran dry). For diagnostics. */
+    val underruns: Int get() = engine.underruns
+
     fun init() {
         val volume = DesktopSettings.prefs.value.volume
         engine.setVolume(volume)
@@ -189,7 +192,14 @@ object DesktopPlayer {
             val file = withContext(Dispatchers.IO) { runCatching { AudioFiles.fileFor(track) } }
                 .getOrElse { onFailed(it); return@launch }
             ensureActive()
-            runCatching { engine.load(file, autoplay, startMs) }.onFailure { onFailed(it); return@launch }
+            val loaded = runCatching { engine.load(file, autoplay, startMs) }.recoverCatching { error ->
+                // A cached copy that won't decode (e.g. saved by an older version): fetch it again once.
+                if (file.parentFile != AppDirs.cache) throw error
+                file.delete()
+                val fresh = withContext(Dispatchers.IO) { AudioFiles.fetch(track, AppDirs.cache) }
+                engine.load(fresh, autoplay, startMs)
+            }
+            loaded.onFailure { onFailed(it); return@launch }
             loadedKey = track.key
             _state.update { s -> s.copy(isLoading = false, durationMs = engine.durationMs.takeIf { it > 0 } ?: s.durationMs) }
             Library.addRecent(track)

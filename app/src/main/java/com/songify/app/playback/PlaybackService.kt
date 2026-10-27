@@ -9,7 +9,15 @@ import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import android.content.Context
+import android.util.Log
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioTrackBufferSizeProvider
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
@@ -54,8 +62,22 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         queueStore = QueueStore(this)
+        // A larger audio output buffer rides out brief CPU hiccups that would otherwise be audible glitches.
+        val renderers = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
+                DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioTrackBufferSizeProvider(
+                        DefaultAudioTrackBufferSizeProvider.Builder()
+                            .setMinPcmBufferDurationUs(750_000)
+                            .setMaxPcmBufferDurationUs(1_500_000)
+                            .build(),
+                    )
+                    .build()
+        }
         // Downloaded songs play from storage; others resolve songify:// URIs to verified streams on load.
-        val player = ExoPlayer.Builder(this)
+        val player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playbackFactory()))
             // Start after 1 s of audio instead of 2.5 s; keep up to a minute buffered for patchy networks.
             .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(15_000, 60_000, 1_000, 3_000).build())
@@ -70,6 +92,11 @@ class PlaybackService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
         player.addListener(QueueWatcher(player))
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onAudioUnderrun(eventTime: AnalyticsListener.EventTime, bufferSize: Int, bufferSizeMs: Long, elapsedSinceLastFeedMs: Long) {
+                Log.w("Songify", "Audio underrun: ${bufferSizeMs}ms buffer, ${elapsedSinceLastFeedMs}ms since last feed")
+            }
+        })
         restoreQueue(player)
         PlayerHub.player = player
         PlayerHub.audioSessionId = player.audioSessionId
@@ -212,8 +239,23 @@ class PlaybackService : MediaSessionService() {
             extendWithRadio()
         }
 
-        // Moves on when a track can't be streamed in full, instead of stalling the queue.
-        override fun onPlayerError(error: PlaybackException) = skip()
+        private val retried = mutableSetOf<String>()
+
+        override fun onPlayerError(error: PlaybackException) {
+            // A refused stream link (HTTP 403/410) usually works again with a fresh link: retry once in place.
+            val code = generateSequence(error.cause) { it.cause }
+                .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
+                .firstOrNull()?.responseCode
+            val id = player.currentMediaItem?.mediaId
+            if (id != null && (code == 403 || code == 410) && retried.add(id)) {
+                StreamResolver.invalidate(id)
+                player.prepare()
+                player.play()
+                return
+            }
+            // Otherwise move on instead of stalling the queue.
+            skip()
+        }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {

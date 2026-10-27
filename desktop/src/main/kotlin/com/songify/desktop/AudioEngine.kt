@@ -40,6 +40,11 @@ private class AacSource(file: File) : PcmSource {
     )
     override val durationMs = (movie.duration * 1000).toLong()
 
+    init {
+        // If nothing decodes, say so plainly instead of handing the sound card an empty format.
+        if (pending == null) throw java.io.IOException("This song's audio format isn't supported")
+    }
+
     private fun decodeNext(): ByteArray? {
         while (track.hasMoreFrames()) {
             val frame = track.readNextFrame() ?: return null
@@ -125,6 +130,11 @@ private class Mp3Source(private val file: File) : PcmSource {
  * All public methods are safe to call from any thread.
  */
 class AudioEngine(private val onEnded: () -> Unit, private val onError: (Throwable) -> Unit) {
+    private companion object {
+        // A long output buffer rides out GC pauses and busy moments without an audible gap.
+        val BUFFER_SECONDS = System.getProperty("songify.audioBufferSeconds")?.toFloatOrNull() ?: 1.5f
+    }
+
     @Volatile private var source: PcmSource? = null
     @Volatile private var line: SourceDataLine? = null
     @Volatile private var paused = true
@@ -137,6 +147,10 @@ class AudioEngine(private val onEnded: () -> Unit, private val onError: (Throwab
     val durationMs: Long get() = source?.durationMs ?: 0
     val isPaused: Boolean get() = paused
 
+    /** Times the sound card ran dry mid-song (each is an audible gap). For diagnostics. */
+    @Volatile var underruns = 0
+        private set
+
     /** Current position, from the frames the sound card has actually played. */
     val positionMs: Long
         get() = positionBaseMs + (line?.microsecondPosition ?: 0) / 1000
@@ -145,9 +159,8 @@ class AudioEngine(private val onEnded: () -> Unit, private val onError: (Throwab
     fun load(file: File, play: Boolean = true, startMs: Long = 0) {
         stop()
         val src = if (file.extension.equals("mp3", ignoreCase = true)) Mp3Source(file) else AacSource(file)
-        val out = AudioSystem.getSourceDataLine(src.format).apply {
-            open(src.format, (src.format.frameRate * src.format.frameSize / 4).toInt()) // ~250 ms buffer
-        }
+        val bufferBytes = (src.format.frameRate * BUFFER_SECONDS).toInt() * src.format.frameSize
+        val out = AudioSystem.getSourceDataLine(src.format).apply { open(src.format, bufferBytes) }
         source = src
         line = out
         applyVolume()
@@ -156,7 +169,10 @@ class AudioEngine(private val onEnded: () -> Unit, private val onError: (Throwab
         paused = !play
         if (play) out.start()
         val myGeneration = ++generation
-        Thread({ pump(myGeneration, src, out) }, "songify-audio").apply { isDaemon = true }.start()
+        Thread({ pump(myGeneration, src, out) }, "songify-audio").apply {
+            isDaemon = true
+            priority = Thread.MAX_PRIORITY
+        }.start()
     }
 
     private fun pump(myGeneration: Int, src: PcmSource, out: SourceDataLine) {
@@ -166,11 +182,13 @@ class AudioEngine(private val onEnded: () -> Unit, private val onError: (Throwab
                     while (paused && seekTo == null && myGeneration == generation) lock.wait(200)
                 }
                 if (myGeneration != generation) break
+                var flushed = false
                 seekTo?.let { ms ->
                     seekTo = null
                     out.flush()
                     src.seek(ms)
                     positionBaseMs = ms - out.microsecondPosition / 1000
+                    flushed = true
                 }
                 if (paused) continue
                 val pcm = src.read()
@@ -179,6 +197,8 @@ class AudioEngine(private val onEnded: () -> Unit, private val onError: (Throwab
                     if (myGeneration == generation) onEnded()
                     break
                 }
+                // An empty line while playing (and not just flushed by a seek) means the card ran dry.
+                if (!flushed && out.isRunning && out.available() >= out.bufferSize && out.microsecondPosition > 500_000) underruns++
                 out.write(pcm, 0, pcm.size)
             }
         } catch (e: Throwable) {

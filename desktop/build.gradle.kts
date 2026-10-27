@@ -7,7 +7,7 @@ plugins {
     id("org.jetbrains.compose")
 }
 
-val songifyVersion = "0.6.0"
+val songifyVersion = "0.6.1"
 
 kotlin {
     jvmToolchain(17)
@@ -40,10 +40,20 @@ val generateVersion by tasks.registering {
 }
 sourceSets.main { kotlin.srcDir(generateVersion) }
 
+// Developer probes run against a scratch data folder, never the real library in %APPDATA%.
+val probeData = layout.buildDirectory.dir("probe-data").get().asFile.absolutePath
+
 tasks.register<JavaExec>("probeAudio") {
-    description = "Fetches one song and checks that JavaFX can play it."
+    description = "Fetches songs and checks the audio engine plays them."
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("com.songify.desktop.AudioProbeKt")
+    systemProperty("songify.dataDir", probeData)
+}
+
+tasks.register<JavaExec>("decodeProbe") {
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.songify.desktop.DecodeProbeKt")
+    systemProperty("songify.dataDir", probeData)
 }
 
 tasks.register<JavaExec>("renderProbe") {
@@ -51,6 +61,8 @@ tasks.register<JavaExec>("renderProbe") {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("com.songify.desktop.RenderProbeKt")
     args(layout.buildDirectory.dir("render").get().asFile.absolutePath)
+    systemProperty("songify.dataDir", probeData)
+    providers.gradleProperty("audioBuffer").orNull?.let { systemProperty("songify.audioBufferSeconds", it) }
 }
 
 compose.desktop {
@@ -58,6 +70,8 @@ compose.desktop {
         mainClass = "com.songify.desktop.MainKt"
         // Shrinking isn't worth it on desktop, and ProGuard trips over the extractor's dependencies.
         buildTypes.release.proguard { isEnabled.set(false) }
+        // Short GC pauses keep the UI and audio smooth.
+        jvmArgs += listOf("-XX:+UseG1GC", "-XX:MaxGCPauseMillis=20", "-Xms128m", "-Xmx1g")
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
             packageName = "Songify"

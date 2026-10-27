@@ -1,5 +1,11 @@
 package com.songify.desktop.ui
 
+import androidx.compose.foundation.HorizontalScrollbar
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -97,7 +104,10 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import java.awt.Desktop
+import javax.swing.JFileChooser
 import java.util.Calendar
 
 private val PagePadding = PaddingValues(start = 32.dp, end = 32.dp, top = 24.dp, bottom = 32.dp)
@@ -133,7 +143,7 @@ fun HomeScreen() {
         value = loaded
     }
 
-    LazyColumn(contentPadding = PagePadding) {
+    ScrollColumn(Modifier.fillMaxSize(), contentPadding = PagePadding) {
         item { Text(greeting(), style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(top = 40.dp)) }
         item { QuickGrid(library) }
         if (library.playlists.isEmpty() && library.liked.isEmpty()) {
@@ -199,23 +209,34 @@ private fun QuickGrid(library: LibraryData) {
 
 @Composable
 private fun CardShelf(title: String, tracks: List<Track>) {
+    val rowState = rememberLazyListState()
     Column {
         SectionTitle(title)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            itemsIndexed(tracks, key = { i, t -> "$i/${t.key}" }) { i, track ->
-                Surface(
-                    onClick = { DesktopPlayer.playTracks(tracks, i) },
-                    color = Color.Transparent,
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.width(176.dp),
-                ) {
-                    Column(Modifier.padding(8.dp)) {
-                        Artwork(track.artworkUrl, Modifier.fillMaxWidth().aspectRatio(1f), corner = 6.dp)
-                        Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-                        Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                    }
-                }
+        LazyRow(state = rowState, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            itemsIndexed(tracks, key = { i, t -> "$i/${t.key}" }) { i, track -> ShelfCard(track) { DesktopPlayer.playTracks(tracks, i) } }
+        }
+        HorizontalScrollbar(rememberScrollbarAdapter(rowState), Modifier.fillMaxWidth().padding(top = 6.dp))
+    }
+}
+
+/** A song card; on hover it lights up and shows a play button, like Spotify's. */
+@Composable
+private fun ShelfCard(track: Track, onPlay: () -> Unit) {
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    Surface(
+        onClick = onPlay,
+        color = if (hovered) Color.White.copy(alpha = 0.07f) else Color.Transparent,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.width(176.dp).hoverable(hover),
+    ) {
+        Column(Modifier.padding(8.dp)) {
+            Box {
+                Artwork(track.artworkUrl, Modifier.fillMaxWidth().aspectRatio(1f), corner = 6.dp)
+                if (hovered) Box(Modifier.align(Alignment.BottomEnd).padding(8.dp)) { PlayCircle(playing = false, size = 44.dp, onClick = onPlay) }
             }
+            Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
         }
     }
 }
@@ -275,7 +296,7 @@ fun SearchScreen() {
         }
     }
 
-    LazyColumn(contentPadding = PagePadding) {
+    ScrollColumn(Modifier.fillMaxSize(), contentPadding = PagePadding) {
         item {
             OutlinedTextField(
                 value = query,
@@ -393,7 +414,7 @@ fun PlaylistScreen(id: String) {
     val done = playlist.tracks.count { downloads[it.key] == Offline.Done }
     val accent = MaterialTheme.colorScheme.primary
 
-    LazyColumn {
+    ScrollColumn(Modifier.fillMaxSize()) {
         item {
             Row(
                 Modifier.fillMaxWidth()
@@ -501,7 +522,7 @@ fun ArtistScreen(name: String) {
         }
     }
     val playingHere = player.current?.let { c -> songs?.any { it.key == c.key } } == true
-    LazyColumn {
+    ScrollColumn(Modifier.fillMaxSize()) {
         item {
             Column(
                 Modifier.fillMaxWidth()
@@ -537,7 +558,7 @@ fun SettingsScreen() {
     val ui = LocalUi.current
     val prefs by DesktopSettings.prefs.collectAsState()
     val downloaded by DesktopDownloads.downloaded.collectAsState()
-    LazyColumn(contentPadding = PagePadding) {
+    ScrollColumn(Modifier.fillMaxSize(), contentPadding = PagePadding) {
         item { Text("Settings", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(top = 40.dp)) }
         item { SectionTitle("Accent color") }
         item {
@@ -589,9 +610,43 @@ fun SettingsScreen() {
         }
         item { SectionTitle("Downloads & updates") }
         item {
-            SettingRow("Downloaded songs", "${downloaded.size} songs · ${DesktopDownloads.bytesUsed() / (1024 * 1024)} MB on this computer") {
-                TextButton(onClick = { runCatching { Desktop.getDesktop().open(AppDirs.downloads) } }) { Text("Open folder") }
+            // Measured once per change, not on every redraw.
+            val usedMb = remember(downloaded.size, prefs.downloadDir) { DesktopDownloads.bytesUsed() / (1024 * 1024) }
+            SettingRow("Downloaded songs", "${downloaded.size} songs · $usedMb MB") {
                 TextButton(enabled = downloaded.isNotEmpty(), onClick = { DesktopDownloads.remove(downloaded); ui.toast("Downloads removed") }) { Text("Remove all") }
+            }
+        }
+        item {
+            val scope = rememberCoroutineScope()
+            var moving by remember { mutableStateOf(false) }
+            SettingRow("Download location", if (moving) "Moving your downloads…" else AppDirs.downloads.absolutePath) {
+                TextButton(onClick = { runCatching { Desktop.getDesktop().open(AppDirs.downloads) } }) { Text("Open") }
+                TextButton(enabled = !moving, onClick = {
+                    val chooser = JFileChooser(AppDirs.downloads).apply {
+                        dialogTitle = "Choose where Songify saves downloads"
+                        fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                    }
+                    if (chooser.showDialog(null, "Use this folder") == JFileChooser.APPROVE_OPTION) {
+                        moving = true
+                        scope.launch {
+                            runCatching { DesktopDownloads.changeFolder(chooser.selectedFile) }
+                                .onSuccess { n -> ui.toast(if (n > 0) "Moved $n songs to the new folder" else "Downloads will be saved there") }
+                                .onFailure { ui.toast(it.message ?: "Couldn't use that folder") }
+                            moving = false
+                        }
+                    }
+                }) { Text("Change…") }
+                if (prefs.downloadDir != null) {
+                    TextButton(enabled = !moving, onClick = {
+                        moving = true
+                        scope.launch {
+                            runCatching { DesktopDownloads.changeFolder(AppDirs.defaultDownloads) }
+                            DesktopSettings.update { it.copy(downloadDir = null) }
+                            ui.toast("Back to the default folder")
+                            moving = false
+                        }
+                    }) { Text("Reset") }
+                }
             }
         }
         item {
@@ -627,10 +682,10 @@ fun SettingsScreen() {
 
 @Composable
 private fun SettingRow(title: String, subtitle: String, action: @Composable () -> Unit) {
-    Row(Modifier.width(720.dp).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
+    Row(Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 16.dp)) {
             Text(title)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         action()
     }

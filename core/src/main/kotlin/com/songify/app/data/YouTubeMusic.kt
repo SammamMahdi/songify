@@ -88,7 +88,8 @@ object YouTubeMusic {
         val info = info(videoId)
         val streams = info.audioStreams
             .filter { it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
-            .filter { !aacOnly || it.format == MediaFormat.M4A }
+            // aacOnly: plain AAC-LC ("mp4a.40.2"); HE-AAC variants don't decode on desktop.
+            .filter { !aacOnly || (it.format == MediaFormat.M4A && (it.codec?.startsWith("mp4a.40.2") ?: (it.itag == 140))) }
         if (streams.isEmpty()) throw IOException("No audio-only stream for $videoId")
         val stream = when (quality) {
             AudioQuality.LOW -> streams.minBy { it.averageBitrate }
@@ -97,6 +98,11 @@ object YouTubeMusic {
             else -> streams.minBy { abs(it.averageBitrate - 128) + if (it.format == MediaFormat.M4A) 0 else 8 }
         }
         return stream.content to info.duration
+    }
+
+    /** Drops cached stream info so the next request fetches fresh stream links. */
+    fun forget(videoId: String) {
+        synchronized(infoCache) { infoCache.remove(videoId) }
     }
 
     // One page fetch serves both the stream URL and radio suggestions.

@@ -19,7 +19,15 @@ data class Prefs(
     val recentSearches: List<String> = emptyList(),
     val guideSeen: Boolean = false,
     val updateCheckedAt: Long = 0,
+    /** Where downloaded songs are kept; null means Songify's own folder. */
+    val downloadDir: String? = null,
+    val sidebarWidth: Float = 300f,
+    val panelWidth: Float = 340f,
+    val window: WindowPrefs? = null,
 )
+
+@Serializable
+data class WindowPrefs(val x: Float, val y: Float, val width: Float, val height: Float, val maximized: Boolean)
 
 /** Small preferences in a JSON file next to the library. */
 object DesktopSettings {

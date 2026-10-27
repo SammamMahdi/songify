@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import okhttp3.Request
 import org.mp4parser.muxer.builder.DefaultMp4Builder
@@ -27,11 +28,18 @@ import java.io.IOException
 /** Where Songify keeps its files: %APPDATA%\Songify on Windows. */
 object AppDirs {
     val data: File by lazy {
+        // Developer probes point this at a scratch folder so they never touch a real library.
+        System.getProperty("songify.dataDir")?.let { return@lazy File(it).apply { mkdirs() } }
         val base = System.getenv("APPDATA")?.let(::File) ?: File(System.getProperty("user.home"), ".songify")
         File(base, "Songify").apply { mkdirs() }
     }
     val cache: File get() = File(data, "cache").apply { mkdirs() }
-    val downloads: File get() = File(data, "downloads").apply { mkdirs() }
+    val defaultDownloads: File get() = File(data, "downloads")
+
+    /** The download folder chosen in Settings, or Songify's own. */
+    val downloads: File
+        get() = DesktopSettings.prefs.value.downloadDir?.let(::File)?.takeIf { it.isDirectory || it.mkdirs() }
+            ?: defaultDownloads.apply { mkdirs() }
 }
 
 /**
@@ -41,6 +49,7 @@ object AppDirs {
 object AudioFiles {
     private const val CHUNK_BYTES = 1L shl 20
     private const val MAX_CACHED = 40
+    private const val MAX_ATTEMPTS = 3
 
     fun downloaded(track: Track): File? = find(AppDirs.downloads, track)
 
@@ -50,8 +59,22 @@ object AudioFiles {
             ?: find(AppDirs.cache, track)?.also { it.setLastModified(System.currentTimeMillis()) }
             ?: fetch(track, AppDirs.cache).also { trimCache() }
 
+    private class RefusedException(code: Int) : IOException("The music host refused the download (HTTP $code)")
+
     /** Downloads [track]'s verified full-length audio into [dir]. Blocking. */
     fun fetch(track: Track, dir: File): File {
+        // Stream links are occasionally refused; a fresh link for the same song usually works.
+        repeat(MAX_ATTEMPTS - 1) {
+            try {
+                return fetchOnce(track, dir)
+            } catch (e: RefusedException) {
+                StreamResolver.invalidate(track.uri)
+            }
+        }
+        return fetchOnce(track, dir)
+    }
+
+    private fun fetchOnce(track: Track, dir: File): File {
         val url = StreamResolver.resolve(track.uri)
         val part = File(dir, "${safeName(track)}.part")
         var position = 0L
@@ -61,6 +84,7 @@ object AudioFiles {
             while (total == null || position < total!!) {
                 val request = Request.Builder().url(url).header("Range", "bytes=$position-${position + CHUNK_BYTES - 1}").build()
                 Http.client.newCall(request).execute().use { r ->
+                    if (r.code == 403 || r.code == 410) throw RefusedException(r.code)
                     if (r.code != 200 && r.code != 206) throw IOException("Couldn't download (HTTP ${r.code})")
                     if (total == null) {
                         total = r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: r.body?.contentLength()?.takeIf { it > 0 }
@@ -170,6 +194,23 @@ object DesktopDownloads {
     }
 
     fun bytesUsed(): Long = AppDirs.downloads.listFiles()?.sumOf { it.length() } ?: 0
+
+    /** Moves downloaded songs into [folder] and keeps downloading there. Returns how many were moved. */
+    suspend fun changeFolder(folder: File): Int = withContext(Dispatchers.IO) {
+        if (!folder.isDirectory && !folder.mkdirs()) throw IOException("Couldn't create that folder")
+        if (!folder.canWrite()) throw IOException("Songify can't save files in that folder")
+        val old = AppDirs.downloads
+        var moved = 0
+        if (old.canonicalPath != folder.canonicalPath) {
+            old.listFiles { f -> f.extension in setOf("m4a", "mp3") }?.forEach { f ->
+                f.copyTo(File(folder, f.name), overwrite = true)
+                f.delete()
+                moved++
+            }
+        }
+        DesktopSettings.update { it.copy(downloadDir = folder.absolutePath) }
+        moved
+    }
 
     private fun save() = writeAtomically(indexFile, AppJson.encodeToString(ListSerializer(Track.serializer()), _downloaded.value))
 }

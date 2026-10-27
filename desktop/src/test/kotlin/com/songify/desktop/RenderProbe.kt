@@ -18,6 +18,8 @@ import java.io.File
  * plays silently, and reports whether playback advanced. Output goes to the path in args[0].
  */
 fun main(args: Array<String>) {
+    // Never run against a real library: this probe plays songs and wipes history at the end.
+    check(System.getProperty("songify.dataDir") != null) { "Run via gradlew :desktop:renderProbe (uses a scratch data folder)" }
     val out = File(args.firstOrNull() ?: "render").apply { mkdirs() }
     NewPipe.init(NewPipeDownloader)
     DesktopSettings.init()
@@ -55,6 +57,16 @@ fun main(args: Array<String>) {
     Thread.sleep(6000)
     println("After Next: ${DesktopPlayer.state.value.current?.title} at ${DesktopPlayer.positionMs}ms")
     snap("3-next", 1000)
+
+    // Stress: render continuously and churn memory for 20 s while music plays, then count gaps.
+    val before = DesktopPlayer.underruns
+    val start = System.currentTimeMillis()
+    var garbage = 0L
+    while (System.currentTimeMillis() - start < 20_000) {
+        scene.render(System.nanoTime())
+        repeat(200) { garbage += ByteArray(64 * 1024).size }
+    }
+    println("Stress: ${DesktopPlayer.underruns - before} audio gaps in 20 s (buffer ${System.getProperty("songify.audioBufferSeconds") ?: "1.5"} s, churned ${garbage / (1 shl 20)} MB)")
     // Leave a first-run state behind: guide still to show, no history.
     DesktopPlayer.setVolume(0.8f)
     DesktopPlayer.shutdown()
