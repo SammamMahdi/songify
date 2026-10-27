@@ -7,7 +7,7 @@ plugins {
     id("org.jetbrains.compose")
 }
 
-val songifyVersion = "0.6.1"
+val songifyVersion = "0.6.2"
 
 kotlin {
     jvmToolchain(17)
@@ -22,10 +22,15 @@ dependencies {
     implementation("org.json:json:20240303")
     implementation("io.coil-kt.coil3:coil-compose:3.0.4")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
-    // Audio: rewrite fragmented MP4 into a regular MP4 (no re-encoding), then decode in pure Java.
-    implementation("org.mp4parser:muxer:1.9.56")
-    implementation("de.sfuhrm:jaad:0.8.7")
-    implementation("com.googlecode.soundlibs:jlayer:1.0.1.4")
+    // FFmpeg (the decoder behind VLC) for full-quality AAC, Opus and MP3; only the Windows natives.
+    implementation("org.bytedeco:javacv:1.5.11") {
+        listOf(
+            "opencv", "openblas", "flycapture", "libdc1394", "libfreenect", "libfreenect2", "librealsense",
+            "librealsense2", "videoinput", "artoolkitplus", "flandmark", "leptonica", "tesseract",
+        ).forEach { exclude(group = "org.bytedeco", module = it) }
+    }
+    implementation("org.bytedeco:ffmpeg:7.1-1.5.11:windows-x86_64")
+    implementation("org.bytedeco:javacpp:1.5.11:windows-x86_64")
 }
 
 // Lets the app read its own version at runtime (shown in Settings, used for update checks).
@@ -47,12 +52,6 @@ tasks.register<JavaExec>("probeAudio") {
     description = "Fetches songs and checks the audio engine plays them."
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("com.songify.desktop.AudioProbeKt")
-    systemProperty("songify.dataDir", probeData)
-}
-
-tasks.register<JavaExec>("decodeProbe") {
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass.set("com.songify.desktop.DecodeProbeKt")
     systemProperty("songify.dataDir", probeData)
 }
 

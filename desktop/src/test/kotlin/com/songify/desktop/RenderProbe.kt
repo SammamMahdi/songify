@@ -26,7 +26,6 @@ fun main(args: Array<String>) {
     DesktopSettings.update { it.copy(guideSeen = true, updateCheckedAt = System.currentTimeMillis()) }
     Library.init(AppDirs.data)
     StreamResolver.quality = DesktopSettings::effectiveQuality
-    StreamResolver.aacOnly = true
     DesktopDownloads.init()
     DesktopPlayer.init()
     DesktopPlayer.setVolume(0f)

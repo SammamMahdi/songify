@@ -19,10 +19,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import okhttp3.Request
-import org.mp4parser.muxer.builder.DefaultMp4Builder
-import org.mp4parser.muxer.container.mp4.MovieCreator
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 
 /** Where Songify keeps its files: %APPDATA%\Songify on Windows. */
@@ -43,10 +40,12 @@ object AppDirs {
 }
 
 /**
- * Songs are played from local files: downloaded ones directly, others fetched into a small cache first.
- * Fetching uses 1 MB ranged requests, which run at full speed (long single connections get throttled).
+ * Songs are played from local files: downloaded ones directly, others fetched into a small cache first
+ * (about a second for a whole song). Fetching uses 1 MB ranged requests, which run at full speed;
+ * one long streaming connection gets throttled to roughly playback speed and would stall.
  */
 object AudioFiles {
+    private val AUDIO_EXTENSIONS = listOf("m4a", "webm", "mp3")
     private const val CHUNK_BYTES = 1L shl 20
     private const val MAX_CACHED = 40
     private const val MAX_ATTEMPTS = 3
@@ -88,7 +87,12 @@ object AudioFiles {
                     if (r.code != 200 && r.code != 206) throw IOException("Couldn't download (HTTP ${r.code})")
                     if (total == null) {
                         total = r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: r.body?.contentLength()?.takeIf { it > 0 }
-                        if (r.header("Content-Type").orEmpty().contains("mpeg")) extension = "mp3"
+                        val type = r.header("Content-Type").orEmpty()
+                        extension = when {
+                            "mpeg" in type -> "mp3"
+                            "webm" in type -> "webm"
+                            else -> "m4a"
+                        }
                     }
                     val bytes = r.body?.bytes() ?: ByteArray(0)
                     out.write(bytes)
@@ -98,34 +102,32 @@ object AudioFiles {
                 }
             }
         }
+        // FFmpeg reads the original file as-is (AAC, Opus or MP3); no rewriting needed.
         val file = File(dir, "${safeName(track)}.$extension")
-        file.delete()
-        if (extension == "m4a") {
-            flatten(part, file)
-            part.delete()
-        } else if (!part.renameTo(file)) {
-            throw IOException("Couldn't save the song")
-        }
+        AUDIO_EXTENSIONS.forEach { File(dir, "${safeName(track)}.$it").delete() }
+        if (!part.renameTo(file)) throw IOException("Couldn't save the song")
         return file
     }
 
-    // AAC streams come as fragmented MP4, which the decoder can't read; rewrite the container only.
-    private fun flatten(fragmented: File, out: File) {
-        val movie = MovieCreator.build(fragmented.absolutePath)
-        FileOutputStream(out).channel.use { DefaultMp4Builder().build(movie).writeContainer(it) }
+    fun delete(track: Track, dir: File) {
+        AUDIO_EXTENSIONS.forEach { File(dir, "${safeName(track)}.$it").delete() }
     }
 
-    fun delete(track: Track, dir: File) {
-        listOf("m4a", "mp3").forEach { File(dir, "${safeName(track)}.$it").delete() }
+    /** Clears song files cached by versions that used the old decoder, once. Downloads are untouched. */
+    fun migrateCache() {
+        val marker = File(AppDirs.cache, ".ffmpeg")
+        if (marker.exists()) return
+        AppDirs.cache.listFiles()?.forEach { it.delete() }
+        marker.createNewFile()
     }
 
     private fun find(dir: File, track: Track): File? =
-        listOf("m4a", "mp3").map { File(dir, "${safeName(track)}.$it") }.firstOrNull { it.exists() && it.length() > 0 }
+        AUDIO_EXTENSIONS.map { File(dir, "${safeName(track)}.$it") }.firstOrNull { it.exists() && it.length() > 0 }
 
     private fun safeName(track: Track) = track.key.replace(Regex("[^A-Za-z0-9_-]"), "_")
 
     private fun trimCache() {
-        AppDirs.cache.listFiles { f -> f.extension in setOf("m4a", "mp3") }
+        AppDirs.cache.listFiles { f -> f.extension in AUDIO_EXTENSIONS }
             ?.sortedByDescending { it.lastModified() }
             ?.drop(MAX_CACHED)
             ?.forEach { it.delete() }

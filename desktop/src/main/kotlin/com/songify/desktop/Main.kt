@@ -44,7 +44,6 @@ private fun selfTest() {
     val report = File(AppDirs.data, "self-test.txt")
     val result = runCatching {
         NewPipe.init(NewPipeDownloader)
-        StreamResolver.aacOnly = true
         val track = MusicSearch.youtube("Anupam Roy").first()
         val file = AudioFiles.fetch(track, AppDirs.cache)
         var error: Throwable? = null
@@ -79,7 +78,7 @@ fun main(args: Array<String>) {
     DesktopSettings.init()
     Library.init(AppDirs.data)
     StreamResolver.quality = DesktopSettings::effectiveQuality
-    StreamResolver.aacOnly = true // the desktop decoder plays AAC and MP3
+    AudioFiles.migrateCache()
     DesktopDownloads.init()
     DesktopPlayer.init()
     // Native look for the folder picker.
