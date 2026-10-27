@@ -5,11 +5,10 @@ import android.content.Intent
 import android.media.audiofx.AudioEffect
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.datasource.ResolvingDataSource
-import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -25,7 +24,6 @@ import com.songify.app.data.Settings
 import com.songify.app.data.StreamResolver
 import com.songify.app.data.Track
 import com.songify.app.data.YouTubeMusic
-import com.songify.app.net.Http
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,7 +32,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // The player can only load items with a URI; controllers can't send one, so the mediaId carries it.
-private fun MediaItem.withStreamUri(): MediaItem = buildUpon().setUri(mediaId).build()
+// The cache key matches the one downloads use, so downloaded songs are found offline.
+private fun MediaItem.withStreamUri(): MediaItem =
+    buildUpon().setUri(mediaId).setCustomCacheKey(Track.fromMediaItem(this)?.key).build()
 
 /**
  * Streams audio in the background (screen off, app closed) with notification,
@@ -52,12 +52,9 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         queueStore = QueueStore(this)
-        // songify:// URIs are resolved to verified stream URLs only when the player loads them.
-        val dataSource = ResolvingDataSource.Factory(OkHttpDataSource.Factory(Http.client)) { spec ->
-            if (spec.uri.scheme == "songify") spec.withUri(StreamResolver.resolve(spec.uri)) else spec
-        }
+        // Downloaded songs play from storage; others resolve songify:// URIs to verified streams on load.
         val player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playbackFactory()))
             // Start after 1 s of audio instead of 2.5 s; keep up to a minute buffered for patchy networks.
             .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(15_000, 60_000, 1_000, 3_000).build())
             .setAudioAttributes(
@@ -80,7 +77,7 @@ class PlaybackService : MediaSessionService() {
         val openApp = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
-        session = MediaSession.Builder(this, player)
+        session = MediaSession.Builder(this, AlwaysNextPlayer(player))
             .setCallback(Callback)
             .setSessionActivity(openApp)
             .build()
@@ -147,9 +144,50 @@ class PlaybackService : MediaSessionService() {
     /** Items given to ExoPlayer directly (not via a controller) need the songify:// URI set too. */
     private fun Track.toPlayable(radio: Boolean = false) = toMediaItem(radio).withStreamUri()
 
+    private var extending = false
+
+    /** Appends songs similar to the current one; with [skipToThem], also jumps to the first. */
+    private fun addSimilarSongs(player: ExoPlayer, skipToThem: Boolean) {
+        if (extending || player.hasNextMediaItem()) return
+        val track = player.currentMediaItem?.let(Track::fromMediaItem) ?: return
+        val queued = (0 until player.mediaItemCount).map { Track.fromMediaItem(player.getMediaItemAt(it))?.key }.toSet()
+        extending = true
+        scope.launch {
+            val more = withContext(Dispatchers.IO) { runCatching { YouTubeMusic.similar(track) }.getOrDefault(emptyList()) }
+                .filter { it.key !in queued }
+                .take(RADIO_BATCH)
+            player.addMediaItems(more.map { it.toPlayable(radio = true) })
+            extending = false
+            if (skipToThem && player.hasNextMediaItem()) {
+                player.seekToNextMediaItem()
+                player.play()
+            }
+        }
+    }
+
+    /**
+     * Next always works, like Spotify: with nothing queued, it finds a similar song and skips to it.
+     * Advertising the command also keeps the Next button enabled in the notification and on the lock screen.
+     */
+    private inner class AlwaysNextPlayer(private val exo: ExoPlayer) : ForwardingPlayer(exo) {
+        override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
+            .addAll(Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+            .build()
+
+        override fun isCommandAvailable(command: Int) =
+            command == Player.COMMAND_SEEK_TO_NEXT || command == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM || super.isCommandAvailable(command)
+
+        override fun seekToNext() = skipForward()
+
+        override fun seekToNextMediaItem() = skipForward()
+
+        private fun skipForward() {
+            if (exo.hasNextMediaItem()) exo.seekToNextMediaItem() else addSimilarSongs(exo, skipToThem = true)
+        }
+    }
+
     private inner class QueueWatcher(private val player: ExoPlayer) : Player.Listener {
         private var wasReady = false
-        private var extending = false
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             wasReady = false
@@ -197,20 +235,9 @@ class PlaybackService : MediaSessionService() {
 
         /** When the last song starts, queue similar songs so the music doesn't stop (Autoplay / radio). */
         private fun extendWithRadio() {
-            if (extending || player.hasNextMediaItem() || player.repeatMode != Player.REPEAT_MODE_OFF) return
-            val item = player.currentMediaItem ?: return
-            val radio = item.mediaMetadata.extras?.getBoolean(EXTRA_RADIO) == true
-            if (!Settings.autoplay.value && !radio) return
-            val track = Track.fromMediaItem(item) ?: return
-            val queued = (0 until player.mediaItemCount).map { Track.fromMediaItem(player.getMediaItemAt(it))?.key }.toSet()
-            extending = true
-            scope.launch {
-                val more = withContext(Dispatchers.IO) { runCatching { YouTubeMusic.similar(track) }.getOrDefault(emptyList()) }
-                    .filter { it.key !in queued }
-                    .take(RADIO_BATCH)
-                player.addMediaItems(more.map { it.toPlayable(radio = true) })
-                extending = false
-            }
+            val radio = player.currentMediaItem?.mediaMetadata?.extras?.getBoolean(EXTRA_RADIO) == true
+            if (player.repeatMode != Player.REPEAT_MODE_OFF || (!Settings.autoplay.value && !radio)) return
+            addSimilarSongs(player, skipToThem = false)
         }
 
         private fun skip() {

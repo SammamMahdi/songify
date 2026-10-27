@@ -50,8 +50,11 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.songify.app.CrashReport
 import com.songify.app.data.Settings
+import com.songify.app.playback.Downloads
+import androidx.compose.runtime.collectAsState
 import android.content.Intent
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalContext
 
@@ -69,7 +72,12 @@ fun SongifyRoot(app: AppViewModel) {
     }
     LaunchedEffect(Unit) {
         if (!Settings.guideSeen) ui.guidePage = 0
+        if (Settings.updateCheckDue()) app.checkForUpdate(manual = false)
     }
+    LaunchedEffect(Unit) {
+        Downloads.failures.collect { ui.toast("Couldn't download “${it.title}”") }
+    }
+    val downloadStates by Downloads.states.collectAsState()
     var crash by remember { mutableStateOf(CrashReport.take()) }
 
     CompositionLocalProvider(
@@ -78,6 +86,7 @@ fun SongifyRoot(app: AppViewModel) {
         LocalPlayer provides controller,
         LocalCurrentKey provides nowPlaying?.track?.key,
         LocalIsPlaying provides (nowPlaying?.isPlaying == true),
+        LocalDownloads provides downloadStates,
     ) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             Scaffold(
@@ -117,10 +126,14 @@ fun SongifyRoot(app: AppViewModel) {
                 enter = slideInVertically(tween(260)) { it },
                 exit = slideOutVertically(tween(220)) { it },
             ) {
-                if (controller != null && nowPlaying != null) FullPlayer(nowPlaying, controller) { ui.playerOpen = false }
+                // The player draws its own gradient instead of a Surface, so set white content explicitly.
+                CompositionLocalProvider(LocalContentColor provides Color.White) {
+                    if (controller != null && nowPlaying != null) FullPlayer(nowPlaying, controller) { ui.playerOpen = false }
+                }
             }
             ui.guidePage?.let { page -> GuideScreen(page) { ui.guidePage = null } }
             Sheets(nowPlaying, controller)
+            UpdateDialog()
             crash?.let { report ->
                 val context = LocalContext.current
                 AlertDialog(

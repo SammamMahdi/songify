@@ -21,6 +21,9 @@ import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FileOpen
@@ -67,6 +70,8 @@ import com.songify.app.data.PlaylistImport
 import com.songify.app.data.PlaylistShare
 import com.songify.app.data.Track
 import com.songify.app.data.YouTubeMusic
+import com.songify.app.playback.Downloads
+import com.songify.app.playback.Offline
 import com.songify.app.playback.Sleep
 import com.songify.app.playback.SleepTimer
 import kotlinx.coroutines.Dispatchers
@@ -134,6 +139,27 @@ private fun TrackMenuSheet(menu: TrackMenu, onDismiss: () -> Unit) {
         SheetAction(Icons.AutoMirrored.Rounded.PlaylistAdd, "Add to playlist") {
             onDismiss()
             ui.addToPlaylist = listOf(track)
+        }
+        when (LocalDownloads.current[track.key]) {
+            Offline.Done -> SheetAction(Icons.Rounded.DownloadDone, "Remove download") {
+                Downloads.remove(listOf(track))
+                ui.toast("Removed from downloads")
+                onDismiss()
+            }
+            Offline.Queued, is Offline.Downloading -> SheetAction(Icons.Rounded.Close, "Cancel download") {
+                Downloads.remove(listOf(track))
+                onDismiss()
+            }
+            Offline.Failed -> SheetAction(Icons.Rounded.Refresh, "Couldn't download · Try again") {
+                Downloads.download(listOf(track))
+                ui.toast("Trying again")
+                onDismiss()
+            }
+            null -> SheetAction(Icons.Rounded.Download, "Download") {
+                Downloads.download(listOf(track))
+                ui.toast("Downloading ${track.title}")
+                onDismiss()
+            }
         }
         SheetAction(Icons.AutoMirrored.Rounded.PlaylistPlay, "Play next") {
             player?.playNext(track)

@@ -71,6 +71,11 @@ import com.songify.app.data.Library
 import com.songify.app.data.Playlist
 import com.songify.app.data.PlaylistShare
 import com.songify.app.data.Track
+import com.songify.app.playback.Downloads
+import com.songify.app.playback.Offline
+import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.DownloadForOffline
+import androidx.compose.material3.CircularProgressIndicator
 
 private enum class LibrarySort(val label: String) { RECENT("Recents"), NAME("Alphabetical"), SIZE("Most songs") }
 
@@ -84,8 +89,11 @@ fun LibraryScreen() {
         LibrarySort.NAME -> library.playlists.sortedBy { it.name.lowercase() }
         LibrarySort.SIZE -> library.playlists.sortedByDescending { it.tracks.size }
     }
-    // Liked Songs is always pinned on top.
-    val rows = listOf(Playlist(LIKED_ID, "Liked Songs", library.liked)) + playlists
+    val downloaded by Downloads.downloaded.collectAsState()
+    // Liked Songs is always pinned on top, then downloads when there are any.
+    val rows = listOf(Playlist(LIKED_ID, "Liked Songs", library.liked)) +
+        listOfNotNull(Playlist(DOWNLOADS_ID, "Downloaded", downloaded).takeIf { downloaded.isNotEmpty() }) +
+        playlists
 
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
@@ -167,12 +175,17 @@ fun PlaylistScreen(id: String) {
     val player = LocalPlayer.current
     val context = LocalContext.current
     val library by Library.data.collectAsState()
-    val playlist = library.playlist(id)
+    val downloaded by Downloads.downloaded.collectAsState()
+    val playlist = if (id == DOWNLOADS_ID) Playlist(DOWNLOADS_ID, "Downloaded", downloaded) else library.playlist(id)
     if (playlist == null) {
         EmptyMessage("This playlist was deleted.")
         return
     }
     val liked = id == LIKED_ID
+    // Liked Songs and Downloaded are built in: they can't be renamed or deleted.
+    val builtIn = liked || id == DOWNLOADS_ID
+    val states = LocalDownloads.current
+    val downloadedHere = playlist.tracks.count { states[it.key] == Offline.Done }
     val base = rememberArtworkColor(playlist.tracks.firstOrNull()?.artworkUrl, if (liked) Color(0xFF4A2FBD) else Color(0xFF3A3A3A))
     var menuOpen by remember { mutableStateOf(false) }
     var sortOpen by remember { mutableStateOf(false) }
@@ -219,12 +232,14 @@ fun PlaylistScreen(id: String) {
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        formatTotal(playlist.tracks),
+                        formatTotal(playlist.tracks) +
+                            if (downloadedHere in 1 until playlist.tracks.size) " · $downloadedHere downloaded" else "",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                     Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        DownloadAllButton(playlist.tracks)
                         IconButton(onClick = { context.startActivity(PlaylistShare.fileIntent(context, playlist)) }) {
                             Icon(Icons.Rounded.Share, contentDescription = "Share playlist")
                         }
@@ -250,11 +265,13 @@ fun PlaylistScreen(id: String) {
                         Box {
                             IconButton(onClick = { menuOpen = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "More") }
                             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("Add songs") },
-                                    leadingIcon = { Icon(Icons.Rounded.Add, null) },
-                                    onClick = { menuOpen = false; ui.nav.navigate(Routes.SEARCH_ROOT) },
-                                )
+                                if (id != DOWNLOADS_ID) {
+                                    DropdownMenuItem(
+                                        text = { Text("Add songs") },
+                                        leadingIcon = { Icon(Icons.Rounded.Add, null) },
+                                        onClick = { menuOpen = false; ui.nav.navigate(Routes.SEARCH_ROOT) },
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Share as text list") },
                                     leadingIcon = { Icon(Icons.AutoMirrored.Rounded.TextSnippet, null) },
@@ -263,7 +280,7 @@ fun PlaylistScreen(id: String) {
                                         context.startActivity(PlaylistShare.textIntent(playlist))
                                     },
                                 )
-                                if (!liked) {
+                                if (!builtIn) {
                                     DropdownMenuItem(
                                         text = { Text("Rename") },
                                         leadingIcon = { Icon(Icons.Rounded.Edit, null) },
@@ -324,7 +341,7 @@ fun PlaylistScreen(id: String) {
                 TrackRow(
                     track,
                     onClick = { player?.playTracks(shown, i) },
-                    onMore = { ui.trackMenu = TrackMenu(track, playlist.id) },
+                    onMore = { ui.trackMenu = TrackMenu(track, playlist.id.takeIf { id != DOWNLOADS_ID }) },
                 )
             }
             if (playlist.missing.isNotEmpty()) {
@@ -405,6 +422,55 @@ fun PlaylistScreen(id: String) {
             deleting = false
             ui.nav.popBackStack()
             Library.deletePlaylist(playlist.id)
+        }
+    }
+}
+
+/** Downloads the whole playlist for offline play, or removes the downloads once everything is saved. */
+@Composable
+private fun DownloadAllButton(tracks: List<Track>) {
+    val ui = LocalUi.current
+    val states = LocalDownloads.current
+    val done = tracks.count { states[it.key] == Offline.Done }
+    val failed = tracks.count { states[it.key] == Offline.Failed }
+    val active = tracks.any { states[it.key] == Offline.Queued || states[it.key] is Offline.Downloading }
+    val all = tracks.isNotEmpty() && done == tracks.size
+    var confirmRemove by remember { mutableStateOf(false) }
+
+    IconButton(enabled = tracks.isNotEmpty(), onClick = {
+        if (all) {
+            confirmRemove = true
+        } else {
+            val queued = Downloads.download(tracks)
+            ui.toast(
+                when {
+                    queued == 0 -> "Already downloading"
+                    failed > 0 -> "Downloading $queued songs (retrying $failed that failed)"
+                    else -> "Downloading $queued songs for offline play"
+                },
+            )
+        }
+    }) {
+        when {
+            all -> Icon(Icons.Rounded.DownloadDone, contentDescription = "Downloaded", tint = MaterialTheme.colorScheme.primary)
+            active -> CircularProgressIndicator(
+                progress = { done.toFloat() / tracks.size },
+                modifier = Modifier.size(22.dp),
+                strokeWidth = 2.dp,
+            )
+            else -> Icon(Icons.Rounded.DownloadForOffline, contentDescription = "Download for offline")
+        }
+    }
+    if (confirmRemove) {
+        ConfirmDialog(
+            title = "Remove downloads?",
+            text = "The songs stay in the playlist; they just won't play offline.",
+            confirm = "Remove",
+            onDismiss = { confirmRemove = false },
+        ) {
+            confirmRemove = false
+            Downloads.remove(tracks)
+            ui.toast("Downloads removed")
         }
     }
 }

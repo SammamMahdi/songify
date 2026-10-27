@@ -49,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.songify.app.playback.Downloads
 import com.songify.app.playback.PlayerHub
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -164,6 +165,30 @@ fun SettingsScreen() {
         SectionTitle("Help")
         SettingRow("Beginner's guide", "Import from Spotify, fix missing songs, share playlists") {
             TextButton(onClick = { ui.guidePage = 0 }) { Text("Open") }
+        }
+
+        SectionTitle("Downloads & updates")
+        val downloaded by Downloads.downloaded.collectAsState()
+        val usedMb = remember(downloaded.size) { Downloads.bytesUsed() / (1024 * 1024) }
+        var confirmRemoveAll by remember { mutableStateOf(false) }
+        SettingRow("Downloaded songs", "${downloaded.size} songs · $usedMb MB on this phone") {
+            TextButton(enabled = downloaded.isNotEmpty(), onClick = { confirmRemoveAll = true }) { Text("Remove all") }
+        }
+        if (confirmRemoveAll) {
+            ConfirmDialog(
+                title = "Remove all downloads?",
+                text = "Songs stay in your playlists; they just won't play offline.",
+                confirm = "Remove all",
+                onDismiss = { confirmRemoveAll = false },
+            ) {
+                confirmRemoveAll = false
+                Downloads.removeAll()
+                ui.toast("Downloads removed")
+            }
+        }
+        val app = LocalAppViewModel.current
+        SettingRow("Songify ${app.versionName}", "Updates are checked automatically") {
+            TextButton(onClick = { app.checkForUpdate(manual = true) }) { Text("Check now") }
         }
 
         SectionTitle("Storage")

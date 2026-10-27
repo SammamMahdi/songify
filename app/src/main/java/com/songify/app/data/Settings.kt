@@ -46,6 +46,14 @@ object Settings {
 
     fun markGuideSeen() = prefs.edit { putBoolean("guide_seen", true) }
 
+    /** True if the automatic update check hasn't run in the last 12 hours (and records this one). */
+    fun updateCheckDue(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - prefs.getLong("update_checked_at", 0) < 12 * 60 * 60 * 1000L) return false
+        prefs.edit { putLong("update_checked_at", now) }
+        return true
+    }
+
     @Volatile private var downgrades = 0
     @Volatile private var lastStallAt = 0L
 

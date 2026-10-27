@@ -67,17 +67,20 @@ object YouTubeMusic {
         )
     }
 
-    /** Songs similar to [track], for radio and autoplay. */
+    /**
+     * Songs similar to [track], for radio and autoplay: the song's music radio mix, which (unlike
+     * generic related videos) only contains music. Falls back to the artist's songs.
+     */
     fun similar(track: Track): List<Track> {
-        val related = if (track.source == Source.YOUTUBE) {
-            info(track.id).relatedItems
-                .filterIsInstance<StreamInfoItem>()
-                .filter { it.duration <= MAX_RADIO_SONG_SECONDS }
-                .mapNotNull(::toTrack)
+        val mix = if (track.source == Source.YOUTUBE) {
+            runCatching {
+                PlaylistInfo.getInfo(service, "https://www.youtube.com/watch?v=${track.id}&list=RDAMVM${track.id}").relatedItems
+                    .filter { it.duration <= MAX_RADIO_SONG_SECONDS }
+                    .mapNotNull(::toTrack)
+            }.getOrDefault(emptyList())
         } else emptyList()
-        // Audius tracks, or videos with few music suggestions: fall back to the artist's songs.
-        val fill = if (related.size < 5) MusicSearch.youtube(track.artist) else emptyList()
-        return (related + fill).filter { it.key != track.key }.distinctBy { it.key }
+        val fill = if (mix.size < 5) MusicSearch.youtube(track.artist) else emptyList()
+        return (mix + fill).filter { it.key != track.key }.distinctBy { it.key }
     }
 
     /** Returns an audio-only stream URL at the requested quality and the song's real duration in seconds. */

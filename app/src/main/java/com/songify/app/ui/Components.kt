@@ -24,12 +24,15 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -61,6 +64,7 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.songify.app.data.Track
+import com.songify.app.playback.Offline
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -155,6 +159,7 @@ fun TrackRow(
                         modifier = Modifier.size(14.dp).padding(end = 2.dp),
                     )
                 }
+                DownloadBadge(LocalDownloads.current[track.key])
                 Text(
                     "${track.artist} · ${formatTime(track.durationSec * 1000)}",
                     maxLines = 1,
@@ -167,6 +172,24 @@ fun TrackRow(
         IconButton(onClick = onMore) {
             Icon(Icons.Rounded.MoreVert, contentDescription = "More options", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+/** Small marker before a song's subtitle: downloaded, downloading, or couldn't download. */
+@Composable
+fun DownloadBadge(state: Offline?) {
+    val modifier = Modifier.size(16.dp).padding(end = 4.dp)
+    when (state) {
+        Offline.Done -> Icon(Icons.Rounded.DownloadDone, contentDescription = "Downloaded", tint = MaterialTheme.colorScheme.primary, modifier = modifier)
+        Offline.Queued -> CircularProgressIndicator(modifier.padding(1.dp), strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        is Offline.Downloading -> CircularProgressIndicator(
+            progress = { state.percent / 100f },
+            modifier = modifier.padding(1.dp),
+            strokeWidth = 1.5.dp,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Offline.Failed -> Icon(Icons.Rounded.ErrorOutline, contentDescription = "Couldn't download", tint = MaterialTheme.colorScheme.error, modifier = modifier)
+        null -> Unit
     }
 }
 

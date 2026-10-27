@@ -11,6 +11,7 @@ import androidx.media3.common.Player
 import androidx.navigation.NavController
 import com.songify.app.data.Track
 import com.songify.app.data.Wanted
+import com.songify.app.playback.Offline
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -67,6 +68,11 @@ val LocalPlayer = compositionLocalOf<Player?> { null }
 /** Key of the track that's playing; changes only when the song changes. */
 val LocalCurrentKey = compositionLocalOf<String?> { null }
 val LocalIsPlaying = compositionLocalOf { false }
+
+/** Download state per track key. */
+val LocalDownloads = compositionLocalOf<Map<String, Offline>> { emptyMap() }
+
+const val DOWNLOADS_ID = "downloads"
 
 fun formatTime(ms: Long): String {
     val s = ms.coerceAtLeast(0) / 1000

@@ -89,6 +89,15 @@ class LiveImportTest {
     }
 
     @Test
+    fun radioIsMusic() {
+        val seed = YouTubeMusic.track("-feVteC_gGM")
+        val radio = YouTubeMusic.similar(seed)
+        println("Radio for ${seed.title}: ${radio.size} songs")
+        radio.take(8).forEach { println("  ${it.title} · ${it.artist} (${it.durationSec}s)") }
+        assertTrue(radio.size >= 5)
+    }
+
+    @Test
     fun spotifyDataExportParses() {
         val json = """{"playlists":[{"name":"Road trip","items":[{"track":{"trackName":"Housewife","artistName":"Tate McRae","albumName":"x","trackUri":"spotify:track:1"}}]}]}"""
         val list = PlaylistImport.fromText("x", json).single()

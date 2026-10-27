@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Favorite
@@ -117,7 +118,7 @@ fun MiniPlayer(np: NowPlaying, player: Player, onOpen: () -> Unit) {
                             onDragEnd = {
                                 val dx = offset.value
                                 when {
-                                    dx < -SWIPE_THRESHOLD && player.hasNextMediaItem() -> player.seekToNextMediaItem()
+                                    dx < -SWIPE_THRESHOLD -> player.seekToNext()
                                     dx > SWIPE_THRESHOLD -> player.seekToPreviousMediaItem()
                                 }
                                 if (abs(dx) > SWIPE_THRESHOLD) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -153,6 +154,7 @@ fun MiniPlayer(np: NowPlaying, player: Player, onOpen: () -> Unit) {
                     }
                 }
                 LikeButton(track, liked)
+                MiniPlayerMenuButton(track)
                 Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                     if (np.isBuffering) {
                         CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Color.White)
@@ -170,6 +172,14 @@ fun MiniPlayer(np: NowPlaying, player: Player, onOpen: () -> Unit) {
             }
             MiniProgress(player, np.durationMs)
         }
+    }
+}
+
+@Composable
+private fun MiniPlayerMenuButton(track: Track) {
+    val ui = LocalUi.current
+    IconButton(onClick = { ui.trackMenu = TrackMenu(track) }, modifier = Modifier.size(40.dp)) {
+        Icon(Icons.Rounded.MoreVert, contentDescription = "More options", tint = Color.White)
     }
 }
 
@@ -271,6 +281,9 @@ fun FullPlayer(np: NowPlaying, player: Player, onClose: () -> Unit) {
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.clickable { ui.open(Routes.artist(track.artist)) },
                     )
+                }
+                IconButton(onClick = { ui.addToPlaylist = listOf(track) }) {
+                    Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = "Add to playlist", modifier = Modifier.size(28.dp))
                 }
                 LikeButton(track, liked, size = 28)
             }

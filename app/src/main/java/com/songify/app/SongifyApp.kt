@@ -6,6 +6,7 @@ import coil.ImageLoaderFactory
 import com.songify.app.data.Library
 import com.songify.app.data.Settings
 import com.songify.app.net.Http
+import com.songify.app.playback.Downloads
 import com.songify.app.net.NewPipeDownloader
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.localization.ContentCountry
@@ -21,6 +22,7 @@ class SongifyApp : Application(), ImageLoaderFactory {
         NewPipe.init(NewPipeDownloader, Localization.DEFAULT, ContentCountry(country))
         Settings.init(this)
         Library.init(this)
+        Downloads.init(this)
     }
 
     // Artwork shares the app's HTTP connections and fades in instead of popping.

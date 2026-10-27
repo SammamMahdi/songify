@@ -12,7 +12,10 @@ import com.songify.app.data.ImportItem
 import com.songify.app.data.ImportedList
 import com.songify.app.data.Library
 import com.songify.app.data.PlaylistImport
+import com.songify.app.data.Release
+import com.songify.app.data.Updater
 import com.songify.app.data.Wanted
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,6 +41,15 @@ sealed interface ImportState {
     data class Failed(val message: String) : ImportState
 }
 
+sealed interface UpdateState {
+    data object Idle : UpdateState
+    data object Checking : UpdateState
+    data class Available(val release: Release) : UpdateState
+    data class Downloading(val release: Release, val progress: Float) : UpdateState
+    data class Ready(val apk: File) : UpdateState
+    data class Failed(val message: String) : UpdateState
+}
+
 val LocalAppViewModel = staticCompositionLocalOf<AppViewModel> { error("AppViewModel not provided") }
 
 /** Runs playlist imports and handles links/files shared into the app. */
@@ -50,6 +62,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val importState = _importState.asStateFlow()
 
     private var job: Job? = null
+
+    private val _update = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    val update = _update.asStateFlow()
+
+    val versionName: String = app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "0"
+
+    /** [manual] checks report "up to date"; automatic ones stay quiet unless there's an update. */
+    fun checkForUpdate(manual: Boolean) {
+        if (_update.value is UpdateState.Checking || _update.value is UpdateState.Downloading) return
+        if (manual) _update.value = UpdateState.Checking
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { Updater.newerThan(versionName) } }
+            _update.value = when {
+                result.isFailure -> if (manual) UpdateState.Failed("Couldn't check for updates. Check your connection.") else UpdateState.Idle
+                result.getOrNull() != null -> UpdateState.Available(result.getOrNull()!!)
+                manual -> UpdateState.Failed("You're on the latest version ($versionName).")
+                else -> UpdateState.Idle
+            }
+        }
+    }
+
+    fun downloadUpdate(release: Release) {
+        _update.value = UpdateState.Downloading(release, 0f)
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    Updater.download(getApplication(), release) { p -> _update.value = UpdateState.Downloading(release, p) }
+                }
+            }
+            _update.value = result.fold({ UpdateState.Ready(it) }, { UpdateState.Failed("Couldn't download the update. Try again later.") })
+        }
+    }
+
+    fun dismissUpdate() {
+        _update.value = UpdateState.Idle
+    }
 
     fun importLink(link: String) =
         runImport("Reading your ${PlaylistImport.linkSourceName(link)} playlist…") { listOf(PlaylistImport.fromLink(link)) }
