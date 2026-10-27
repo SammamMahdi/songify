@@ -89,6 +89,14 @@ class LiveImportTest {
     }
 
     @Test
+    fun updaterSeesLatestRelease() {
+        val offered = Updater.newerThan("0.4.9")
+        println("Update offered to 0.4.9: ${offered?.version} ${offered?.apkUrl}")
+        assertTrue(offered != null && offered.apkUrl.endsWith(".apk"))
+        assertTrue(Updater.newerThan("99.0.0") == null)
+    }
+
+    @Test
     fun radioIsMusic() {
         val seed = YouTubeMusic.track("-feVteC_gGM")
         val radio = YouTubeMusic.similar(seed)
