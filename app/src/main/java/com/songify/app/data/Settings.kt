@@ -8,13 +8,6 @@ import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class AudioQuality(val label: String, val detail: String) {
-    AUTO("Automatic", "Adjusts to your connection"),
-    LOW("Low", "About 50 kbps · uses the least data"),
-    NORMAL("Normal", "About 128 kbps"),
-    HIGH("High", "Up to 160 kbps · best on Wi-Fi"),
-}
-
 /** Small preferences kept in SharedPreferences on the phone. */
 object Settings {
     val DEFAULT_ACCENT = 0xFF1ED760.toInt()

@@ -76,7 +76,7 @@ object Downloads {
 
     /** Streams resolve songify:// URIs to verified full-length audio. */
     fun upstream(): DataSource.Factory = ResolvingDataSource.Factory(ChunkedDataSource.Factory(OkHttpDataSource.Factory(Http.client))) { spec ->
-        if (spec.uri.scheme == "songify") spec.withUri(StreamResolver.resolve(spec.uri)) else spec
+        if (spec.uri.scheme == "songify") spec.withUri(Uri.parse(StreamResolver.resolve(spec.uri.toString()))) else spec
     }
 
     /** For playback: downloaded songs play from storage with no network; others stream (and aren't cached). */

@@ -24,6 +24,8 @@ import com.songify.app.data.Settings
 import com.songify.app.data.StreamResolver
 import com.songify.app.data.Track
 import com.songify.app.data.YouTubeMusic
+import com.songify.app.data.fromMediaItem
+import com.songify.app.data.toMediaItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -149,7 +151,7 @@ class PlaybackService : MediaSessionService() {
     /** Appends songs similar to the current one; with [skipToThem], also jumps to the first. */
     private fun addSimilarSongs(player: ExoPlayer, skipToThem: Boolean) {
         if (extending || player.hasNextMediaItem()) return
-        val track = player.currentMediaItem?.let(Track::fromMediaItem) ?: return
+        val track = player.currentMediaItem?.let { Track.fromMediaItem(it) } ?: return
         val queued = (0 until player.mediaItemCount).map { Track.fromMediaItem(player.getMediaItemAt(it))?.key }.toSet()
         extending = true
         scope.launch {
@@ -192,7 +194,7 @@ class PlaybackService : MediaSessionService() {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             wasReady = false
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && SleepTimer.consumeEndOfSong()) player.pause()
-            mediaItem?.let(Track::fromMediaItem)?.let(Library::addRecent)
+            mediaItem?.let { Track.fromMediaItem(it) }?.let(Library::addRecent)
             if (player.playWhenReady) prepareAhead()
             saveQueue(player)
         }

@@ -5,6 +5,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.songify.app.data.Library
 import com.songify.app.data.Settings
+import com.songify.app.data.StreamResolver
 import com.songify.app.net.Http
 import com.songify.app.playback.Downloads
 import com.songify.app.net.NewPipeDownloader
@@ -21,7 +22,8 @@ class SongifyApp : Application(), ImageLoaderFactory {
         val country = Locale.getDefault().country.ifEmpty { "US" }
         NewPipe.init(NewPipeDownloader, Localization.DEFAULT, ContentCountry(country))
         Settings.init(this)
-        Library.init(this)
+        StreamResolver.quality = Settings::effectiveQuality
+        Library.init(filesDir)
         Downloads.init(this)
     }
 

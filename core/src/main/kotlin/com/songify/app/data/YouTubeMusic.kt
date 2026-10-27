@@ -84,9 +84,11 @@ object YouTubeMusic {
     }
 
     /** Returns an audio-only stream URL at the requested quality and the song's real duration in seconds. */
-    fun audioStream(videoId: String, quality: AudioQuality): Pair<String, Long> {
+    fun audioStream(videoId: String, quality: AudioQuality, aacOnly: Boolean = false): Pair<String, Long> {
         val info = info(videoId)
-        val streams = info.audioStreams.filter { it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
+        val streams = info.audioStreams
+            .filter { it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
+            .filter { !aacOnly || it.format == MediaFormat.M4A }
         if (streams.isEmpty()) throw IOException("No audio-only stream for $videoId")
         val stream = when (quality) {
             AudioQuality.LOW -> streams.minBy { it.averageBitrate }

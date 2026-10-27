@@ -1,7 +1,10 @@
 package com.songify.app.ui
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.core.content.FileProvider
+import java.io.File
 import android.os.Build
 import android.provider.Settings as AndroidSettings
 import androidx.compose.foundation.layout.Column
@@ -22,7 +25,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
-import com.songify.app.data.Updater
+
+private fun installIntent(context: Context, apk: File): Intent =
+    Intent(Intent.ACTION_VIEW)
+        .setDataAndType(FileProvider.getUriForFile(context, "${context.packageName}.files", apk), "application/vnd.android.package-archive")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
 
 /** Update available → downloading → install, driven by [AppViewModel.update]. */
 @Composable
@@ -84,7 +91,7 @@ fun UpdateDialog() {
                 confirmButton = {
                     TextButton(onClick = {
                         if (canInstall) {
-                            context.startActivity(Updater.installIntent(context, state.apk))
+                            context.startActivity(installIntent(context, state.apk))
                         } else {
                             context.startActivity(
                                 Intent(AndroidSettings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")),

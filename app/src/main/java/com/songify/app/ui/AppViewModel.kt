@@ -26,7 +26,6 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.util.zip.ZipInputStream
 
 data class ImportedPlaylist(val id: String, val name: String, val added: Int, val missing: List<Wanted>)
 
@@ -88,7 +87,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    Updater.download(getApplication(), release) { p -> _update.value = UpdateState.Downloading(release, p) }
+                    val dir = File(getApplication<Application>().cacheDir, "updates")
+                    Updater.download(dir, release) { p -> _update.value = UpdateState.Downloading(release, p) }
                 }
             }
             _update.value = result.fold({ UpdateState.Ready(it) }, { UpdateState.Failed("Couldn't download the update. Try again later.") })
@@ -128,7 +128,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runImport("Reading your list…") { PlaylistImport.fromText(name, text) }
 
     fun importFile(uri: Uri) = runImport("Opening the file…") {
-        readFiles(uri).flatMap { (name, text) -> PlaylistImport.fromText(name, text) }
+        val (name, bytes) = readFile(uri)
+        PlaylistImport.fromFile(name, bytes)
     }
 
     fun cancelImport() {
@@ -182,35 +183,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The file's playlist name and text; a ZIP (e.g. Exportify's "Export All") yields one entry per file inside. */
-    private fun readFiles(uri: Uri): List<Pair<String, String>> {
+    /** The picked file's name and contents. */
+    private fun readFile(uri: Uri): Pair<String, ByteArray> {
         val resolver = getApplication<Application>().contentResolver
         val fileName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null
         } ?: "Imported playlist"
         val bytes = resolver.openInputStream(uri)?.use { readLimited(it) } ?: throw IOException("Couldn't open that file")
-        val isZip = bytes.size > 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()
-        if (!isZip) return listOf(playlistName(fileName) to bytes.decodeToString())
-
-        val entries = mutableListOf<Pair<String, String>>()
-        ZipInputStream(bytes.inputStream()).use { zip ->
-            while (true) {
-                val entry = zip.nextEntry ?: break
-                val name = entry.name.substringAfterLast('/')
-                if (!entry.isDirectory && importable.containsMatchIn(name)) {
-                    entries += playlistName(name) to readLimited(zip).decodeToString()
-                }
-            }
-        }
-        if (entries.isEmpty()) throw IOException("No playlists found in that ZIP file")
-        return entries
+        return fileName to bytes
     }
-
-    private val importable = Regex("""\.(json|csv|m3u8?|txt)$""", RegexOption.IGNORE_CASE)
-
-    // "my_road_trip.csv" -> "my road trip"
-    private fun playlistName(fileName: String) =
-        fileName.replace(Regex("""(\.songify)?\.(json|csv|m3u8?|txt)$""", RegexOption.IGNORE_CASE), "").replace('_', ' ').trim()
 
     private fun readLimited(input: InputStream): ByteArray {
         val out = ByteArrayOutputStream()

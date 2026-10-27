@@ -13,6 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.zip.ZipInputStream
 
 /** The file format Songify uses to share playlists between phones. */
 @Serializable
@@ -109,6 +110,31 @@ object PlaylistImport {
         if (lists.isEmpty()) throw IOException("No songs found in that file")
         return lists
     }
+
+    /** A picked or shared file; a ZIP (e.g. Exportify's "Export All") yields one list per playlist inside. */
+    fun fromFile(fileName: String, bytes: ByteArray): List<ImportedList> {
+        val isZip = bytes.size > 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()
+        if (!isZip) return fromText(playlistName(fileName), bytes.decodeToString())
+        val lists = mutableListOf<ImportedList>()
+        ZipInputStream(bytes.inputStream()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                val name = entry.name.substringAfterLast('/')
+                if (!entry.isDirectory && importableFile.containsMatchIn(name)) {
+                    lists += runCatching { fromText(playlistName(name), zip.readBytes().decodeToString()) }.getOrDefault(emptyList())
+                }
+            }
+        }
+        if (lists.isEmpty()) throw IOException("No playlists found in that ZIP file")
+        return lists
+    }
+
+    private val importableFile = Regex("""\.(json|csv|m3u8?|txt)$""", RegexOption.IGNORE_CASE)
+
+    // "my_road_trip.songify.json" -> "my road trip"
+    private fun playlistName(fileName: String) =
+        fileName.replace(Regex("""(\.songify)?\.(json|csv|m3u8?|txt|zip)$""", RegexOption.IGNORE_CASE), "").replace('_', ' ').trim()
+            .ifEmpty { "Imported playlist" }
 
     // Playlist1.json: {"playlists":[{"name", "items":[{"track":{"trackName","artistName"}}]}]}
     // YourLibrary.json: {"tracks":[{"track","artist"}]} — the user's Liked Songs.

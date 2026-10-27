@@ -1,6 +1,5 @@
 package com.songify.app.data
 
-import android.net.Uri
 import com.songify.app.net.Http
 import okhttp3.Request
 import java.io.IOException
@@ -8,43 +7,57 @@ import java.util.concurrent.ConcurrentHashMap
 
 class NotFullSongException(message: String) : IOException(message)
 
+enum class AudioQuality(val label: String, val detail: String) {
+    AUTO("Automatic", "Adjusts to your connection"),
+    LOW("Low", "About 50 kbps · uses the least data"),
+    NORMAL("Normal", "About 128 kbps"),
+    HIGH("High", "Up to 160 kbps · best on Wi-Fi"),
+}
+
 /**
  * Turns songify:// URIs into stream URLs, rejecting anything that isn't the complete song.
  * Nothing is downloaded: the check asks for a single byte and reads the total size header.
  */
 object StreamResolver {
-    // YouTube stream URLs expire after ~6h.
+    // Stream URLs expire after ~6h.
     private const val TTL_MS = 4 * 60 * 60 * 1000L
 
     // Size / duration below this means the server holds a preview, not the listed song.
     private const val MIN_KBPS = 32
 
+    /** The quality to stream at right now; each app plugs in its own (e.g. network-aware on phones). */
+    @Volatile var quality: () -> AudioQuality = { AudioQuality.NORMAL }
+
+    /** Restrict to AAC/MP3 for players that can't decode Opus. */
+    @Volatile var aacOnly = false
+
     private class Entry(val url: String, val expiresAt: Long)
 
     private val cache = ConcurrentHashMap<String, Entry>()
 
-    /** Blocking; call off the main thread. */
-    fun resolve(uri: Uri): Uri {
-        val host = uri.host
-        val id = uri.lastPathSegment ?: throw IOException("Bad track URI: $uri")
-        val quality = Settings.effectiveQuality()
-        val key = "$host/$id/$quality"
-        cache[key]?.takeIf { it.expiresAt > System.currentTimeMillis() }?.let { return Uri.parse(it.url) }
+    /** Blocking; call off the main thread. Returns the playable stream URL for a [Track.uri]. */
+    fun resolve(trackUri: String): String {
+        val match = Regex("""^songify://(\w+)/([^?]+)(?:\?d=(\d+))?""").find(trackUri)
+            ?: throw IOException("Bad track URI: $trackUri")
+        val (host, id) = match.destructured
+        val listedSec = match.groupValues[3].toLongOrNull() ?: 0
+        val quality = quality()
+        val key = "$host/$id/$quality/$aacOnly"
+        cache[key]?.takeIf { it.expiresAt > System.currentTimeMillis() }?.let { return it.url }
 
-        val listedSec = uri.getQueryParameter("d")?.toLongOrNull() ?: 0
         val (url, durationSec) = when (host) {
-            "youtube" -> YouTubeMusic.audioStream(id, quality)
+            "youtube" -> YouTubeMusic.audioStream(id, quality, aacOnly)
             "audius" -> Audius.streamUrl(id) to listedSec // Audius serves a single MP3 quality
             else -> throw IOException("Unknown source: $host")
         }
         verifyFullLength(url, durationSec)
         cache[key] = Entry(url, System.currentTimeMillis() + TTL_MS)
-        return Uri.parse(url)
+        return url
     }
 
     /** Warms the cache so the track starts instantly when played. */
-    fun prefetch(uri: String) {
-        runCatching { resolve(Uri.parse(uri)) }
+    fun prefetch(trackUri: String) {
+        runCatching { resolve(trackUri) }
     }
 
     private fun verifyFullLength(url: String, durationSec: Long) {

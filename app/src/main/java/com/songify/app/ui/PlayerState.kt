@@ -16,6 +16,8 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.songify.app.data.Track
+import com.songify.app.data.fromMediaItem
+import com.songify.app.data.toMediaItem
 import com.songify.app.playback.PlaybackService
 import kotlinx.coroutines.delay
 
@@ -68,11 +70,11 @@ fun Player.positionState(intervalMs: Long = 500): State<Long> = produceState(cur
 }
 
 private fun Player.snapshot() = NowPlaying(
-    track = currentMediaItem?.let(Track::fromMediaItem),
+    track = currentMediaItem?.let { Track.fromMediaItem(it) },
     isPlaying = isPlaying,
     isBuffering = playbackState == Player.STATE_BUFFERING,
     durationMs = duration.takeIf { it != C.TIME_UNSET }
-        ?: currentMediaItem?.let(Track::fromMediaItem)?.durationSec?.times(1000) ?: 0,
+        ?: currentMediaItem?.let { Track.fromMediaItem(it) }?.durationSec?.times(1000) ?: 0,
     shuffle = shuffleModeEnabled,
     repeatMode = repeatMode,
     error = playerError?.let { it.cause?.message ?: it.errorCodeName },

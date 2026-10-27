@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -16,8 +16,8 @@ android {
         applicationId = "com.songify.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "0.6.0"
     }
 
     buildTypes {
@@ -63,12 +63,7 @@ dependencies {
     implementation("androidx.media3:media3-session:1.5.1")
     implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
 
-    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.5")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation(project(":core"))
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20240303") // real org.json; Android's is a stub in unit tests
 }

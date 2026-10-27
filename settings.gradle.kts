@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Songify"
-include(":app")
+include(":core", ":app", ":desktop")

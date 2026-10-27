@@ -1,7 +1,5 @@
 package com.songify.app.data
 
-import android.content.Context
-import androidx.core.util.AtomicFile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,21 +37,22 @@ data class LibraryData(
     fun isLiked(track: Track) = liked.any { it.key == track.key }
 }
 
-/** The user's library, kept in a single JSON file on the phone. No server, no database. */
+/** The user's library, kept in a single JSON file on the device. No server, no database. */
 object Library {
     private const val MAX_RECENT = 50
 
-    private lateinit var file: AtomicFile
+    private lateinit var file: File
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var saveJob: Job? = null
 
     private val _data = MutableStateFlow(LibraryData())
     val data = _data.asStateFlow()
 
-    fun init(context: Context) {
-        file = AtomicFile(File(context.filesDir, "library.json"))
+    /** Loads the library from [dir] (the app's private files folder). */
+    fun init(dir: File) {
+        file = File(dir, "library.json")
         _data.value = runCatching {
-            AppJson.decodeFromString<LibraryData>(file.readFully().decodeToString())
+            AppJson.decodeFromString<LibraryData>(file.readText())
         }.getOrDefault(LibraryData())
     }
 
@@ -123,13 +122,19 @@ object Library {
         saveJob?.cancel()
         saveJob = scope.launch {
             delay(300) // coalesce bursts of edits into one write
-            val out = file.startWrite()
-            try {
-                out.write(AppJson.encodeToString(LibraryData.serializer(), _data.value).encodeToByteArray())
-                file.finishWrite(out)
-            } catch (e: Exception) {
-                file.failWrite(out)
-            }
+            writeAtomically(file, AppJson.encodeToString(LibraryData.serializer(), _data.value))
+        }
+    }
+}
+
+/** Writes to a temp file and swaps it in, so a crash mid-write never corrupts [file]. */
+fun writeAtomically(file: File, text: String) {
+    val temp = File(file.parentFile, "${file.name}.tmp")
+    runCatching {
+        temp.writeText(text)
+        if (!temp.renameTo(file)) {
+            file.delete()
+            temp.renameTo(file)
         }
     }
 }
